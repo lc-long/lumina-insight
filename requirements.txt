@@ -15,6 +15,7 @@ chromadb==1.5.7
 click==8.3.2
 colorama==0.4.6
 cryptography==46.0.7
+dashscope==1.25.17
 dataclasses-json==0.6.7
 distro==1.9.0
 durationpy==0.10

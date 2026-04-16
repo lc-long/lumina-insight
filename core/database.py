@@ -1,4 +1,9 @@
 import os
+from dotenv import load_dotenv
+
+# 加载项目根目录下的 .env 文件
+load_dotenv()
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 # ==========================================
@@ -9,7 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 # 这里我们先写死作为演示，稍后你会把它移到 .env 中
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+asyncpg://postgres:yourpassword@localhost:5432/lumina_db"
+    "postgresql+asyncpg://postgres:mysecretpassword@localhost:5432/lumina_db" # 顺手把备用项也改成正确的，双保险
 )
 
 # ==========================================

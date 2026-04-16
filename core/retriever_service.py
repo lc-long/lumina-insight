@@ -52,11 +52,11 @@ class EnterpriseRetriever:
         
         # 3. Rerank 精排
         # 将我们数据库查出来的文本，拼装成 DashScope 需要的格式
-        documents_for_rerank = [{"text": chunk.content} for chunk in recalled_chunks]
+        documents_for_rerank = [chunk.content for chunk in recalled_chunks]
         
         # 调用阿里云的文本重排序模型
         resp = dashscope.TextReRank.call(
-            model=dashscope.TextReRank.Models.text_rerank,
+            model="gte-rerank",
             query=query,
             documents=documents_for_rerank,
             top_n=top_k,

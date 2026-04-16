@@ -4,7 +4,7 @@ from core.retriever_service import EnterpriseRetriever
 
 async def test_search():
     # 模拟用户查询
-    query = "报销额度是多少？"
+    query = "开题报告中，英文的论文题目是什么？"
     user_id = "User_A" # 模拟当前登录的用户
     
     retriever = EnterpriseRetriever()

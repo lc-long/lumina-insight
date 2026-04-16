@@ -1,39 +1,43 @@
 import os
-from typing import List, Dict
+import pymupdf4llm
+from typing import List
 from langchain_core.documents import Document
-from langchain_community.document_loaders import PDFPlumberLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import MarkdownTextSplitter # 改用专门切分 Markdown 的利器
 
 class DocumentManager:
     def __init__(self):
-        # 初始化高级文本切分器
-        # 企业级文档通常段落分明，按照段落、句子来切分比纯按字符数切分更不容易切断上下文
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            separators=["\n\n", "\n", "。", "！", "？", " ", ""]
+        # 使用 Markdown 切分器，它会尽量保证不把一个完整的 Markdown 表格切成两半
+        self.text_splitter = MarkdownTextSplitter(
+            chunk_size=600,
+            chunk_overlap=50
         )
 
     def process_pdf_with_permissions(self, file_path: str, uploader_id: str, access_level: str) -> List[Document]:
         """
-        解析 PDF 并为切分后的每一个文本块打上权限标签
-        :param file_path: 文件物理路径
-        :param uploader_id: 上传者的用户ID
-        :param access_level: 权限级别 ("private" 或 "public")
+        使用 PyMuPDF4LLM 进行高级版面解析，提取 Markdown 并打标
         """
-        print(f"正在使用 PDFPlumber 深度解析: {file_path}")
-        # PDFPlumber 能够更好地识别 PDF 里的文本流和底层表格结构
-        loader = PDFPlumberLoader(file_path)
-        raw_docs = loader.load()
+        print(f"正在使用 PyMuPDF4LLM 进行多模态版面解析 (提取 Markdown 表格): {file_path}")
         
-        # 1. 文本切分
-        chunks = self.text_splitter.split_documents(raw_docs)
+        # 1. 核心大招：直接把整个 PDF 连同表格转成排版精美的 Markdown 字符串
+        try:
+            md_text = pymupdf4llm.to_markdown(file_path)
+        except Exception as e:
+            print(f"PDF 转换 Markdown 失败: {e}")
+            return []
+
+        # 2. 将全局 Markdown 文本包装成 LangChain 认识的 Document 对象
+        # 我们目前先整体作为一个 Document，然后再交给切分器去切
+        raw_doc = Document(
+            page_content=md_text,
+            metadata={"source": file_path, "page": 1} # PyMuPDF4LLM 默认合并为一个长文本，我们统称第一页，企业里可以按页单独提取
+        )
         
-        # 2. 【核心】注入企业级元数据 (Metadata)
+        # 3. 智能 Markdown 切分
+        chunks = self.text_splitter.split_documents([raw_doc])
+        
+        # 4. 注入企业级元数据 (Metadata)
         processed_chunks = []
         for chunk in chunks:
-            # chunk.metadata 默认带有 source (文件路径) 和 page (页码)
-            # 我们强行注入业务权限字段
             chunk.metadata.update({
                 "uploader_id": uploader_id,
                 "access_level": access_level,
@@ -41,25 +45,19 @@ class DocumentManager:
             })
             processed_chunks.append(chunk)
             
-        print(f"解析完成，共切分为 {len(processed_chunks)} 个知识块，已打标。")
+        print(f"解析完成，共提取并切分为 {len(processed_chunks)} 个包含 Markdown 表格的知识块。")
         return processed_chunks
 
-# 测试代码 (仅在直接运行该文件时执行)
+# 测试代码
 if __name__ == "__main__":
-    # 模拟测试：请确保在项目根目录的 data/ 文件夹下随便放一个 test.pdf
-    test_pdf_path = "../data/test.pdf"
-    
+    test_pdf_path = "../data/test.pdf" # 换成你刚才报错的那个带表格的 pdf 名字
     if os.path.exists(test_pdf_path):
         manager = DocumentManager()
-        # 模拟 User_001 上传了一份私人合同
-        chunks = manager.process_pdf_with_permissions(
-            file_path=test_pdf_path, 
-            uploader_id="User_001", 
-            access_level="private"
-        )
+        chunks = manager.process_pdf_with_permissions(test_pdf_path, "User_A", "public")
         
-        # 打印第一个知识块的元数据看看效果
-        print("\n第一块数据的元数据(Metadata)状态:")
-        print(chunks[0].metadata)
+        # 打印出第一个 Chunk，看看是不是完美的 Markdown 表格！
+        if chunks:
+            print("\n====== 提取出的核心 Markdown 内容预览 ======\n")
+            print(chunks[5].page_content[:500]) # 打印前 500 个字符看看有没有 |---|
     else:
-        print("请在 data/ 目录下放置一个 test.pdf 用于测试解析器。")
+        print(f"找不到测试文件: {test_pdf_path}")

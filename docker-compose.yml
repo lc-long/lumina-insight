@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  db:
+    # 直接使用官方打包好 pgvector 的镜像，基于 PostgreSQL 16
+    image: pgvector/pgvector:pg16
+    container_name: lumina_db
+    restart: always
+    environment:
+      # 设置超级管理员密码 (本地开发可以简单点)
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: lumina_db
+    ports:
+      # 将容器内的 5432 端口映射到你 Windows 本地的 5432 端口
+      - "5432:5432"
+    volumes:
+      # 将数据持久化到本地目录，这样重启 Docker 数据也不会丢
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

@@ -1,0 +1,22 @@
+# Python 忽略项
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+
+# 环境变量与机密配置 (极其重要)
+.env
+.env.local
+
+# 数据库与本地持久化文件
+chroma_data_store/
+*.sqlite3
+
+# 本地测试数据 (不上传测试用的 PDF/Excel)
+data/*
+!data/.gitkeep
+
+# IDE 配置
+.vscode/
+.idea/

@@ -3,7 +3,7 @@ import json
 
 url = "http://127.0.0.1:8000/api/chat/stream"
 payload = {
-    "question": "开题报告中，英文的论文题目是什么？",
+    "question": "对比实验表格中，DKT在AS2009上的表现怎么样？",
     "user_id": "User_A"
 }
 

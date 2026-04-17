@@ -26,9 +26,9 @@ async def ingest_pipeline(file_path: str, uploader_id: str, access_level: str):
     vector_service = VectorService()
 
     # 2. 提取与切分 (Extract & Split)
-    # 调用我们写的解析器，将 PDF 切成小块并打上权限 Metadata
-    print("[1/3] 正在解析 PDF 并切分文档块...")
-    chunks = doc_manager.process_pdf_with_permissions(
+    # 调用我们写的解析器，将文档切成小块并打上权限 Metadata
+    print("[1/3] 正在解析文档并切分文档块...")
+    chunks = doc_manager.process_document_with_permissions(
         file_path=file_path,
         uploader_id=uploader_id,
         access_level=access_level
@@ -52,11 +52,11 @@ async def ingest_pipeline(file_path: str, uploader_id: str, access_level: str):
 if __name__ == "__main__":
     # 模拟 User_A 上传了一份公开的公司制度文档
     # 你可以修改这里的路径，指向你实际放入 data/ 目录下的 pdf
-    target_pdf = "data/test.pdf" 
+    target_file = "data/records.xlsx"  # 也可以测试 docx、pptx、csv 等 Office 文档
     
     # 启动异步流水线
     asyncio.run(ingest_pipeline(
-        file_path=target_pdf,
+        file_path=target_file,
         uploader_id="User_A",
         access_level="public"
     ))

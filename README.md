@@ -23,7 +23,7 @@ Lumina Insight 是一个企业级的 RAG（检索增强生成）后端系统。�
 确保你的电脑已安装 Git、Python 3.10+ 和 Docker Desktop。
 
 ```bash
-git clone [https://github.com/你的用户名/lumina-insight.git](https://github.com/你的用户名/lumina-insight.git)
+git clone git@github.com:lc-long/lumina-insight.git
 cd lumina-insight
 python -m venv venv
 source venv/Scripts/activate  # Windows 用户

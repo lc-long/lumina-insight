@@ -1,63 +1,82 @@
 import os
 import pymupdf4llm
+from markitdown import MarkItDown
 from typing import List
 from langchain_core.documents import Document
-from langchain_text_splitters import MarkdownTextSplitter # 改用专门切分 Markdown 的利器
+from langchain_text_splitters import MarkdownTextSplitter
 
 class DocumentManager:
     def __init__(self):
-        # 使用 Markdown 切分器，它会尽量保证不把一个完整的 Markdown 表格切成两半
+        # 统一使用 Markdown 切分器
         self.text_splitter = MarkdownTextSplitter(
             chunk_size=600,
             chunk_overlap=50
         )
+        # 初始化微软 Office 文档解析引擎
+        self.office_parser = MarkItDown()
 
-    def process_pdf_with_permissions(self, file_path: str, uploader_id: str, access_level: str) -> List[Document]:
+    def _extract_to_markdown(self, file_path: str) -> str:
         """
-        使用 PyMuPDF4LLM 进行高级版面解析，提取 Markdown 并打标
+        核心路由逻辑：嗅探文件格式，并调用对应的底层引擎提取 Markdown
         """
-        print(f"正在使用 PyMuPDF4LLM 进行多模态版面解析 (提取 Markdown 表格): {file_path}")
+        # 获取文件后缀名
+        ext = file_path.lower().split('.')[-1]
         
-        # 1. 核心大招：直接把整个 PDF 连同表格转成排版精美的 Markdown 字符串
         try:
-            md_text = pymupdf4llm.to_markdown(file_path)
+            if ext == 'pdf':
+                print(f"📄 [嗅探器] 检测到 PDF，正在路由给 PyMuPDF4LLM 引擎...")
+                return pymupdf4llm.to_markdown(file_path)
+            
+            elif ext in ['docx', 'xlsx', 'pptx', 'csv']:
+                print(f"📊 [嗅探器] 检测到 Office 文档 (.{ext})，正在路由给 MarkItDown 引擎...")
+                # MarkItDown 能极其完美地把 Excel 的行列转化为 Markdown 表格
+                result = self.office_parser.convert(file_path)
+                return result.text_content
+            
+            elif ext in ['txt', 'md']:
+                print(f"📝 [嗅探器] 检测到纯文本/Markdown，直接读取...")
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            else:
+                raise ValueError(f"系统暂不支持解析 .{ext} 格式的文件。")
+                
         except Exception as e:
-            print(f"PDF 转换 Markdown 失败: {e}")
+            print(f"❌ 解析文件 {file_path} 时发生严重错误: {e}")
+            return ""
+
+    # 注意：方法名从 process_pdf_with_permissions 改为了 process_document_with_permissions
+    def process_document_with_permissions(self, file_path: str, uploader_id: str, access_level: str) -> List[Document]:
+        """
+        通用的全格式文档处理与打标入口
+        """
+        # 1. 动态获取全局 Markdown 文本
+        md_text = self._extract_to_markdown(file_path)
+        
+        if not md_text.strip():
             return []
 
-        # 2. 将全局 Markdown 文本包装成 LangChain 认识的 Document 对象
-        # 我们目前先整体作为一个 Document，然后再交给切分器去切
+        # 2. 包装为 LangChain Document 对象
         raw_doc = Document(
             page_content=md_text,
-            metadata={"source": file_path, "page": 1} # PyMuPDF4LLM 默认合并为一个长文本，我们统称第一页，企业里可以按页单独提取
+            metadata={"source": file_path, "page": 1} # Office 暂时统称 1 页
         )
         
-        # 3. 智能 Markdown 切分
+        # 3. 使用 Markdown 切分器智能切块
         chunks = self.text_splitter.split_documents([raw_doc])
         
         # 4. 注入企业级元数据 (Metadata)
         processed_chunks = []
         for chunk in chunks:
+            # 获取实际的文件名而不是完整路径
+            file_name = os.path.basename(file_path)
+            
             chunk.metadata.update({
                 "uploader_id": uploader_id,
                 "access_level": access_level,
-                "doc_type": "pdf"
+                "doc_type": file_path.split('.')[-1], # 记录原始文档类型
+                "source": file_name # 覆盖掉绝对路径，防止暴露服务器目录结构
             })
             processed_chunks.append(chunk)
             
-        print(f"解析完成，共提取并切分为 {len(processed_chunks)} 个包含 Markdown 表格的知识块。")
+        print(f"✅ 解析完成！共提取并切分为 {len(processed_chunks)} 个带标签的知识块。")
         return processed_chunks
-
-# 测试代码
-if __name__ == "__main__":
-    test_pdf_path = "../data/test.pdf" # 换成你刚才报错的那个带表格的 pdf 名字
-    if os.path.exists(test_pdf_path):
-        manager = DocumentManager()
-        chunks = manager.process_pdf_with_permissions(test_pdf_path, "User_A", "public")
-        
-        # 打印出第一个 Chunk，看看是不是完美的 Markdown 表格！
-        if chunks:
-            print("\n====== 提取出的核心 Markdown 内容预览 ======\n")
-            print(chunks[5].page_content[:500]) # 打印前 500 个字符看看有没有 |---|
-    else:
-        print(f"找不到测试文件: {test_pdf_path}")

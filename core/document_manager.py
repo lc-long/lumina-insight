@@ -1,5 +1,6 @@
 import re
 import os
+import uuid # 🌟 新增：用于生成唯一的父块 ID
 import dashscope # 新增：引入 dashscope 用于调用视觉模型
 from dashscope import MultiModalConversation # 新增：多模态对话接口
 import pymupdf4llm
@@ -13,12 +14,17 @@ dashscope.api_key = os.getenv("DASHSCOPE_API_KEY")
 
 class DocumentManager:
     def __init__(self):
-        # 统一使用 Markdown 切分器
-        self.text_splitter = MarkdownTextSplitter(
-            chunk_size=600,
+        # 🌟 核心改造：准备两套切分器
+        # 1. 父切分器：保持大段落的完整逻辑上下文（比如 2000 字）
+        self.parent_splitter = MarkdownTextSplitter(
+            chunk_size=1500, 
+            chunk_overlap=200
+        )
+        # 2. 子切分器：粒度更细，用于获取精准的向量语义匹配（比如 400 字）
+        self.child_splitter = MarkdownTextSplitter(
+            chunk_size=400,
             chunk_overlap=50
         )
-        # 初始化微软 Office 文档解析引擎
         self.office_parser = MarkItDown()
 
     def _ocr_with_qwen_vl(self, file_path: str) -> str:
@@ -100,9 +106,8 @@ class DocumentManager:
         if not md_text or not md_text.strip():
             return []
 
-        # 🌟 核心修复：在【切分之前】进行全局扫描，提取整篇文档的所有图片
+        # 提取全局图片（保留之前的多模态逻辑）
         all_doc_images = re.findall(r'!\[.*?\]\((.*?)\)', md_text)
-        
         ext = file_path.lower().split('.')[-1]
         if ext in ['png', 'jpg', 'jpeg']:
             all_doc_images.append(file_path)
@@ -112,22 +117,33 @@ class DocumentManager:
             metadata={"source": file_path, "page": 1} 
         )
         
-        chunks = self.text_splitter.split_documents([raw_doc])
+        # 🌟 核心改造：两级切分逻辑
+        # 1. 先切出大块（父块）
+        parent_docs = self.parent_splitter.split_documents([raw_doc])
         
-        processed_chunks = []
-        for chunk in chunks:
-            file_name = os.path.basename(file_path)
+        processed_child_chunks = []
+        
+        for p_doc in parent_docs:
+            # 给这个父块发一张唯一的“身份证”
+            parent_id = str(uuid.uuid4())
+            parent_content = p_doc.page_content
             
-            chunk.metadata.update({
-                "uploader_id": uploader_id,
-                "access_level": access_level,
-                "doc_type": ext,
-                "source": file_name,
-                # 🌟 核心修复：把全局图片赋予每一个知识块。
-                # 这样不管大模型召回了哪一段文字，都能顺带把这篇论文的图拿过去看
-                "images": all_doc_images  
-            })
-            processed_chunks.append(chunk)
+            # 2. 把当前父块，继续切成小块（子块）
+            child_docs = self.child_splitter.split_documents([p_doc])
             
-        print(f"✅ 解析完成！共切分 {len(processed_chunks)} 个块，发现全局图片 {len(all_doc_images)} 张。")
-        return processed_chunks
+            for c_doc in child_docs:
+                file_name = os.path.basename(file_path)
+                c_doc.metadata.update({
+                    "uploader_id": uploader_id,
+                    "access_level": access_level,
+                    "doc_type": ext,
+                    "source": file_name,
+                    "images": all_doc_images,
+                    # 🌟 将“父亲”的基因（ID和完整内容）注入子块的元数据中
+                    "parent_id": parent_id,
+                    "parent_content": parent_content 
+                })
+                processed_child_chunks.append(c_doc)
+            
+        print(f"✅ 解析完成！生成了 {len(parent_docs)} 个父块，进而切分为 {len(processed_child_chunks)} 个用于向量化的子块。")
+        return processed_child_chunks

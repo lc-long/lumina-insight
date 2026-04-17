@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import base64 # 新增 base64 库
 from fastapi import APIRouter, Depends
@@ -80,6 +81,10 @@ async def rag_stream_generator(request: ChatRequest, db: AsyncSession):
         else:
             standalone_question = request.question
 
+        # 🌟 核心修复：只在“原始问题”中探测文件名，防止历史记录里的文件名干扰检索
+        # 这样如果你这句没提 kt.png，我们就不会进入独占模式
+        current_files = re.findall(r'[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+', request.question)
+
         # ---------------------------------------------------------
         # 3. 检索模块：使用重写后的问题去搜数据库
         # ---------------------------------------------------------
@@ -87,7 +92,8 @@ async def rag_stream_generator(request: ChatRequest, db: AsyncSession):
             db=db, 
             query=standalone_question, 
             user_id=request.user_id, 
-            top_k=3
+            top_k=3,
+            target_files=current_files # 🌟 新增参数：显式传递当前指定的文件
         )
         
         if not results:

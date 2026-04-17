@@ -3,7 +3,7 @@ import json
 
 url = "http://127.0.0.1:8000/api/chat/stream"
 payload = {
-    "question": "我有几个水果",
+    "question": "hpakt论文的主要创新点是什么？",
     "user_id": "User_A",
     "session_id": "session_12345" # 🌟 前端生成的唯一会话ID
 }

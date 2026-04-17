@@ -14,14 +14,12 @@ class EnterpriseRetriever:
     def __init__(self):
         self.embeddings_model = DashScopeEmbeddings(model="text-embedding-v1")
 
-    async def hybrid_search(self, db: AsyncSession, query: str, user_id: str, top_k: int = 3) -> List[dict]:
+    # 🌟 修改点 1：函数签名增加了 target_files 参数，默认值为 None
+    async def hybrid_search(self, db: AsyncSession, query: str, user_id: str, top_k: int = 3, target_files: List[str] = None) -> List[dict]:
         print(f"\n[1/4] 正在将用户问题转化为向量: '{query}'")
         query_vector = self.embeddings_model.embed_query(query)
 
-        # ---------------------------------------------------------
-        # 1. 提取潜在的文件名 (纯净正则：只匹配 英文/数字/横杠/下划线 + 后缀)
-        # ---------------------------------------------------------
-        potential_files = re.findall(r'[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+', query)
+        # 🌟 修改点 2：删除了内部的 potential_files 正则表达式，直接使用传进来的 target_files
         
         # 基础权限过滤条件
         permission_filter = or_(
@@ -45,9 +43,10 @@ class EnterpriseRetriever:
         # 3. 第二路：文件名精准召回
         # ---------------------------------------------------------
         keyword_chunks = []
-        if potential_files:
-            print(f"      -> 🎯 嗅探到纯净文件名线索 {potential_files}，触发强制召回！")
-            like_conditions = [KnowledgeChunk.source_file.ilike(f"%{f}%") for f in potential_files]
+        # 🌟 修改点 3：用 target_files 替代原来的 potential_files
+        if target_files:
+            print(f"      -> 🎯 嗅探到外部传入的文件名线索 {target_files}，触发强制召回！")
+            like_conditions = [KnowledgeChunk.source_file.ilike(f"%{f}%") for f in target_files]
             
             stmt_keyword = (
                 select(KnowledgeChunk)
@@ -64,11 +63,18 @@ class EnterpriseRetriever:
         final_results = []
         
         # 【模式 A】：如果命中了文件名，进入“独占模式”
-        if keyword_chunks:
-            print(f"      -> 🛡️ 触发独占模式：只返回目标文件内容，屏蔽其他语义干扰！")
+        # 🌟 修复核心：只要前端传了 target_files，就必须进入独占模式，绝不允许向下“滑坡”
+        if target_files:
+            print(f"      -> 🛡️ 触发独占模式拦截：用户明确指定了文件 {target_files}")
+            
+            # 补丁：如果在数据库里根本没找到这个文件，直接返回空！截断后续的向量搜索
+            if not keyword_chunks:
+                print(f"      -> ❌ 数据库中未找到指定文件，已阻断向量搜索，防止幻觉！")
+                return [] 
+                
             for chunk in keyword_chunks:
                 final_results.append({
-                    "content": chunk.content,
+                    "content": chunk.meta_info.get("parent_content", chunk.content),
                     "score": 0.9999,  # 赋予极高的假分数，保证排在第一
                     "source": chunk.source_file,
                     "page": chunk.page_number,
@@ -79,10 +85,35 @@ class EnterpriseRetriever:
             print(f"[4/4] 检索链路执行完毕（独占模式）！最终输出 {len(final_results)} 条。")
             return final_results[:top_k]
 
-        # 【模式 B】：如果没有命中文件名，进入常规的“向量 + Rerank 模式”
+        # 【模式 B】：如果没有命中文件名 (即 target_files 为空)，才进入常规的“向量 + Rerank 模式”
         if vector_chunks:
-            print(f"[3/4] 正在请求 Rerank 大模型对 {len(vector_chunks)} 条进行精排...")
-            documents_for_rerank = [chunk.content for chunk in vector_chunks]
+            print(f"[3/4] 向量检索搜到了 {len(vector_chunks)} 个相关子块，正在追溯完整的父文档上下文...")
+            
+            # 🌟 核心逻辑：父文档重组与去重
+            parent_docs_dict = {}
+            for chunk in vector_chunks:
+                # 尝试获取父级 ID 和父级内容
+                parent_id = chunk.meta_info.get("parent_id")
+                # 构造统一格式的数据字典（安全脱离 SQLAlchemy 模型）
+                doc_info = {
+                    "id": parent_id or chunk.id, # 如果没有 parent_id (老数据)，就用自己的 id
+                    # 如果有父内容就用父内容，没有就用自己原本的子内容兜底
+                    "content": chunk.meta_info.get("parent_content", chunk.content),
+                    "source": chunk.source_file,
+                    "page": chunk.page_number,
+                    "uploader": chunk.uploader_id,
+                    "images": chunk.meta_info.get("images", [])
+                }
+                
+                # 利用字典的 Key 唯一性，天然过滤掉属于同一个父块的多个子块
+                if doc_info["id"] not in parent_docs_dict:
+                    parent_docs_dict[doc_info["id"]] = doc_info
+            
+            # 去重后，真正要送去精排的、包含大段落上下文的候选文档
+            reconstructed_parents = list(parent_docs_dict.values())
+            print(f"      -> 🧩 去重组装后，提取出 {len(reconstructed_parents)} 个不重复的父级完整段落，准备精排...")
+
+            documents_for_rerank = [item["content"] for item in reconstructed_parents]
             
             try:
                 resp = dashscope.TextReRank.call(
@@ -95,14 +126,15 @@ class EnterpriseRetriever:
                 
                 if resp.status_code == 200:
                     for reranked_item in resp.output.results:
-                        original_chunk = vector_chunks[reranked_item.index]
+                        # 从重组后的父文档列表中获取对应项
+                        original_item = reconstructed_parents[reranked_item.index]
                         final_results.append({
-                            "content": original_chunk.content,
+                            "content": original_item["content"], # 这里已经是大段落的父内容了
                             "score": reranked_item.relevance_score,
-                            "source": original_chunk.source_file,
-                            "page": original_chunk.page_number,
-                            "uploader": original_chunk.uploader_id,
-                            "images": original_chunk.meta_info.get("images", []) 
+                            "source": original_item["source"],
+                            "page": original_item["page"],
+                            "uploader": original_item["uploader"],
+                            "images": original_item["images"]
                         })
                 else:
                     print(f"❌ Rerank 接口报错: {resp.message}")

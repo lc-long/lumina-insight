@@ -24,5 +24,5 @@ async def clear_old_pdf(file_name: str):
 
 if __name__ == "__main__":
     # 指定你要删除的旧文件名
-    target_file = "test2.pdf" 
+    target_file = "kt.png" 
     asyncio.run(clear_old_pdf(target_file))

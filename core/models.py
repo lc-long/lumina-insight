@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, JSON, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, JSON, Text, ForeignKey, DateTime
 from sqlalchemy.orm import DeclarativeBase
 from pgvector.sqlalchemy import Vector # 核心：导入 pgvector 支持
+from datetime import datetime
 
 class Base(DeclarativeBase):
     pass
@@ -31,3 +32,19 @@ class KnowledgeChunk(Base):
 
     def __repr__(self):
         return f"<KnowledgeChunk(source={self.source_file}, page={self.page_number}, access={self.access_level})>"
+
+class ChatMessage(Base):
+    """
+    聊天记录表：用于实现多轮对话记忆
+    """
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(100), index=True) # 会话ID，区分不同次的聊天
+    user_id = Column(String(50), index=True)
+    role = Column(String(20))                    # 'user' 或 'assistant'
+    content = Column(Text, nullable=False)       # 消息内容
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ChatMessage(role={self.role}, session={self.session_id})>"

@@ -3,8 +3,9 @@ import json
 
 url = "http://127.0.0.1:8000/api/chat/stream"
 payload = {
-    "question": "只基于kt.png这张图片，给我解释一下知识追踪",
-    "user_id": "User_A"
+    "question": "我有几个水果",
+    "user_id": "User_A",
+    "session_id": "session_12345" # 🌟 前端生成的唯一会话ID
 }
 
 print("====== 🚀 发起流式请求 ======\n")

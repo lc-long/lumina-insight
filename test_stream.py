@@ -3,7 +3,7 @@ import json
 
 url = "http://127.0.0.1:8000/api/chat/stream"
 payload = {
-    "question": "对比实验表格中，DKT在AS2009上的表现怎么样？",
+    "question": "解释一下hpakt论文中的热力图，分析这个热力图是什么意思，表现了模型的什么?",
     "user_id": "User_A"
 }
 

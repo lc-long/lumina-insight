@@ -52,7 +52,7 @@ async def ingest_pipeline(file_path: str, uploader_id: str, access_level: str):
 if __name__ == "__main__":
     # 模拟 User_A 上传了一份公开的公司制度文档
     # 你可以修改这里的路径，指向你实际放入 data/ 目录下的 pdf
-    target_file = "data/records.xlsx"  # 也可以测试 docx、pptx、csv 等 Office 文档
+    target_file = "data/test2.pdf"  # 也可以测试 docx、pptx、csv 等 Office 文档
     
     # 启动异步流水线
     asyncio.run(ingest_pipeline(

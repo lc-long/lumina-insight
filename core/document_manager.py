@@ -1,3 +1,4 @@
+import re
 import os
 import dashscope # 新增：引入 dashscope 用于调用视觉模型
 from dashscope import MultiModalConversation # 新增：多模态对话接口
@@ -68,7 +69,10 @@ class DocumentManager:
         try:
             if ext == 'pdf':
                 print(f"📄 [嗅探器] 检测到 PDF，正在路由给 PyMuPDF4LLM 引擎...")
-                return pymupdf4llm.to_markdown(file_path)
+                # 新增：创建专门的目录存放提取出的图片
+                os.makedirs("data/images", exist_ok=True)
+                # 新增：开启 write_images，并将图片统一保存到指定目录
+                return pymupdf4llm.to_markdown(file_path, write_images=True, image_path="data/images")
             
             elif ext in ['docx', 'xlsx', 'pptx', 'csv']:
                 print(f"📊 [嗅探器] 检测到 Office 文档 (.{ext})，正在路由给 MarkItDown 引擎...")
@@ -91,11 +95,17 @@ class DocumentManager:
             return ""
 
     def process_document_with_permissions(self, file_path: str, uploader_id: str, access_level: str) -> List[Document]:
-        """通用的全格式文档处理与打标入口"""
         md_text = self._extract_to_markdown(file_path)
         
         if not md_text or not md_text.strip():
             return []
+
+        # 🌟 核心修复：在【切分之前】进行全局扫描，提取整篇文档的所有图片
+        all_doc_images = re.findall(r'!\[.*?\]\((.*?)\)', md_text)
+        
+        ext = file_path.lower().split('.')[-1]
+        if ext in ['png', 'jpg', 'jpeg']:
+            all_doc_images.append(file_path)
 
         raw_doc = Document(
             page_content=md_text,
@@ -107,13 +117,17 @@ class DocumentManager:
         processed_chunks = []
         for chunk in chunks:
             file_name = os.path.basename(file_path)
+            
             chunk.metadata.update({
                 "uploader_id": uploader_id,
                 "access_level": access_level,
-                "doc_type": file_path.split('.')[-1],
-                "source": file_name 
+                "doc_type": ext,
+                "source": file_name,
+                # 🌟 核心修复：把全局图片赋予每一个知识块。
+                # 这样不管大模型召回了哪一段文字，都能顺带把这篇论文的图拿过去看
+                "images": all_doc_images  
             })
             processed_chunks.append(chunk)
             
-        print(f"✅ 解析完成！共提取并切分为 {len(processed_chunks)} 个带标签的知识块。")
+        print(f"✅ 解析完成！共切分 {len(processed_chunks)} 个块，发现全局图片 {len(all_doc_images)} 张。")
         return processed_chunks

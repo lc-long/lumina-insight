@@ -1,51 +1,47 @@
 import os
 import json
+import base64 # 新增 base64 库
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-
-# 导入我们之前写好的模块
 from core.database import get_db
 from core.retriever_service import EnterpriseRetriever
 
 # 导入 LangChain 依赖
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+# 新增引入 HumanMessage 用于构建多模态消息体
+from langchain_core.messages import HumanMessage 
 
 router = APIRouter()
 retriever = EnterpriseRetriever()
 
-# 1. 初始化流式大模型
+# 1. 升级为多模态视觉大模型
 llm = ChatOpenAI(
     api_key=os.getenv("DASHSCOPE_API_KEY"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model="qwen-plus",
-    temperature=0.1,  # RAG 场景要求严谨，温度调低
-    streaming=True    # 必须开启流式开关
+    model="qwen-vl-max",  # 从 qwen-plus 修改为视觉加强版
+    temperature=0.1,
+    streaming=True
 )
 
-# 2. 定义前端请求的数据格式
 class ChatRequest(BaseModel):
     question: str
-    user_id: str = "User_A"  # 模拟前端传过来的当前登录用户
+    user_id: str = "User_A"
 
-# 3. 构造企业级严谨 Prompt
-template = """你是一个专业的企业级知识库助手。请严格基于以下【已知信息】来回答用户的问题。
+# 修改 Prompt 为纯字符串，因为后续要手动组装多模态 Message
+template_str = """你是一个专业的企业级知识库助手。请严格基于以下【已知信息】及提供的【图片】来回答用户的问题。
 在回答时，请逻辑清晰、分点阐述。
-【极其重要】：如果【已知信息】中找不到答案，你必须直接回复“根据当前权限的内部资料，我无法回答该问题”，严禁胡编乱造！
+如果【已知信息】和【图片】中找不到答案，你必须直接回复“根据当前权限的内部资料，我无法回答该问题”。
 
 【已知信息】:
 {context}
 
 用户问题: {question}
 """
-prompt = ChatPromptTemplate.from_template(template)
 
-# 4. 核心：异步流式生成器
 async def rag_stream_generator(request: ChatRequest, db: AsyncSession):
     try:
-        # A. 触发混合检索与精排
         results = await retriever.hybrid_search(
             db=db, 
             query=request.question, 
@@ -53,48 +49,68 @@ async def rag_stream_generator(request: ChatRequest, db: AsyncSession):
             top_k=3
         )
         
-        # 如果什么都没搜到，直接返回无权限/无数据提示，不用消耗大模型 Token
         if not results:
             yield f"data: {json.dumps({'type': 'content', 'data': '根据当前权限的内部资料，未检索到相关内容。'})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             return
 
-        # B. 提取溯源信息和上下文文本
         sources = []
         context_texts = []
+        all_image_paths = [] # 新增：用于收集本次检索召回的所有相关图片
+
         for res in results:
             context_texts.append(res['content'])
+            
+            # 收集去重后的真实有效图片路径
+            for img_path in res.get('images', []):
+                if img_path not in all_image_paths and os.path.exists(img_path):
+                    all_image_paths.append(img_path)
+
             sources.append({
                 "source": res['source'],
                 "page": res['page'],
                 "score": round(res['score'], 4)
             })
             
-        # C. 【魔法时刻】首先把溯源信息作为第一帧推给前端
-        # 前端收到这个 type: sources 后，就可以立马在页面侧边栏渲染出引用文档卡片
         yield f"data: {json.dumps({'type': 'sources', 'data': sources})}\n\n"
         
-        # D. 拼接上下文，交给大模型生成回答
+        # 拼接文本上下文
         context_str = "\n\n---\n\n".join(context_texts)
-        chain = prompt | llm
+        final_prompt_text = template_str.replace("{context}", context_str).replace("{question}", request.question)
         
-        # E. 监听大模型的流式吐字，包装成 JSON 发给前端
-        async for chunk in chain.astream({"context": context_str, "question": request.question}):
-            if chunk.content: # 过滤空字符
+        # 构造 LangChain 要求的 OpenAI 兼容多模态消息体格式
+        message_content = [{"type": "text", "text": final_prompt_text}]
+        
+        # 遍历所有被召回的本地图片
+        print(f"🖼️ [Debug] 准备喂给大模型的真实图片路径: {all_image_paths}") # <--- 加上这一行
+        # 遍历所有被召回的本地图片，转为 Base64 拼接到 Prompt 中
+        for img_path in all_image_paths:
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode('utf-8')
+                # 简单判断 MIME 类型
+                mime_type = "image/png" if img_path.lower().endswith('.png') else "image/jpeg"
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{img_b64}"}
+                })
+        
+        messages = [HumanMessage(content=message_content)]
+        
+        # 直接调用 llm.astream 处理包含图文的多模态对象
+        async for chunk in llm.astream(messages):
+            if chunk.content:
                 yield f"data: {json.dumps({'type': 'content', 'data': chunk.content})}\n\n"
                 
-        # F. 明确告诉前端传输结束
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
         
     except Exception as e:
-        # 捕获异常并通过流推送给前端，避免前端一直转圈等待
         yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
 
 # 5. 暴露接口
 @router.post("/api/chat/stream")
 async def chat_stream_endpoint(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     """
-    企业级 RAG 流式问答接口
+    多模态 RAG 流式问答接口
     """
     # 将生成器包装进 StreamingResponse，指定媒体类型为 SSE
     return StreamingResponse(
